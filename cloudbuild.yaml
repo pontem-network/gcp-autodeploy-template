@@ -1,0 +1,10 @@
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['build', '--build-arg', $_BUILD_ARGS, '-t', 'gcr.io/$PROJECT_ID/$REPO_NAME:$BRANCH_NAME', '-f', './.build/Dockerfile', '.']
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/$REPO_NAME:$BRANCH_NAME']
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args: ['run', 'deploy', $REPO_NAME, '--tag', $BRANCH_NAME, '--revision-suffix', $BRANCH_NAME-$SHORT_SHA, '--image', 'gcr.io/$PROJECT_ID/$REPO_NAME:$BRANCH_NAME', '--platform', 'managed', '--region', 'us-central1', '--allow-unauthenticated', '--port', '80', '--set-env-vars', '$_ENVS', '--labels', 'tag=$BRANCH_NAME,updated=$_TIMESTAMP']
+images:
+  - 'gcr.io/$PROJECT_ID/$REPO_NAME'

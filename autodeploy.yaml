@@ -1,0 +1,63 @@
+name: Autodeploy
+run-name: Autodeploy for ${{ github.head_ref}}.${{ github.repository }}.devops.mom stand
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  build-and-deploy-app:
+    runs-on: self-hosted
+    env:
+      BRANCH_NAME: ${{ github.head_ref }}
+      REPO_NAME: ${{ github.repository }}
+      SUCCESS_COUNT: 5
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Create timestamp, short_sha
+      run: | 
+        echo "_TIMESTAMP=$(date +%s)" >> $GITHUB_ENV
+        echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+      
+    - name: Build image and deploy on GCP
+      uses: actions-hub/gcloud@master
+      env:
+        PROJECT_ID: ${{ secrets.PROJECT_ID }}
+        APPLICATION_CREDENTIALS: ${{ secrets.APPLICATION_CREDENTIALS }}
+        _BUILD_ARGS: "NODE_ENV=development"
+        _ENVS: KEY=VALUE
+      with:
+        args: builds submit --config .build/cloudbuild.yaml --substitutions _BUILD_ARGS=$_BUILD_ARGS,_ENVS=$_ENVS,_TIMESTAMP=$_TIMESTAMP,BRANCH_NAME=$BRANCH_NAME,SHORT_SHA=$SHORT_SHA,REPO_NAME=$REPO_NAME
+
+    - name: Create DNS record
+      uses: everpcpc/cloudflare-dns-action@v1
+      with:
+        type: "A"
+        name: "${{ env.BRANCH_NAME }}.${{ env.REPO_NAME }}.devops.mom"
+        content: "${{ secrets.GCP_IP }}"
+        ttl: 1
+        proxied: true
+        token: ${{ secrets.CLOUDFLARE_TOKEN }}
+        zone: ${{ secrets.CLOUDFLARE_ZONE }}
+
+    - name: Wait site is up
+      run: |
+        echo  "${{ github.repository }}"
+        STAGE_URL="https://$BRANCH_NAME.$REPO_NAME.devops.mom"
+        UNSUCCESS_COUNT=0
+        while [ $SUCCESS_COUNT -gt 0 ]; do
+          if [[ "$(curl -s -o /dev/null -w ''%{http_code}'' $STAGE_URL)" == "200" ]]; then
+            echo "$STAGE_URL is up, checking for $SUCCESS_COUNT more times"
+            SUCCESS_COUNT=$((SUCCESS_COUNT-1))
+          else
+            echo "$STAGE_URL is not up yet, checking again in 10 seconds"
+            UNSUCCESS_COUNT=$((UNSUCCESS_COUNT+1))
+            if [ $UNSUCCESS_COUNT -gt 30 ]; then
+              echo "Site is not up after 5 minutes, exiting"
+              exit 1
+            fi
+          fi
+          sleep 10
+        done
